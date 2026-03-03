@@ -1,0 +1,18 @@
+{
+    "typing_speed": {
+        "mean": 98.41,
+        "std": 93.22
+    },
+    "backspaces": {
+        "mean": 2.95,
+        "std": 3.5
+    },
+    "mouse_activity": {
+        "mean": 43.04,
+        "std": 44.95
+    },
+    "tab_switches": {
+        "mean": 3.87,
+        "std": 5.42
+    }
+}

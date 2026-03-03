@@ -1,0 +1,50 @@
+# ⚠️ NEVER upload this file - contains personal notes and API keys
+notes.txt
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+venv/
+env/
+.env
+.venv/
+
+# Environment variables / secrets
+.env
+.env.local
+*.env
+
+# Trained model (large binary file - regenerate with train_ai.py)
+*.pkl
+
+# PyInstaller build artifacts
+*.spec
+build/
+dist/
+*.iml
+
+# IDE / Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs (optional: keep sample data, ignore large personal logs)
+# mood_log.csv
+# activity_log.csv
+# behavior_log.csv
+# ai_data.csv
