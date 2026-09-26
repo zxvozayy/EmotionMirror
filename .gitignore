@@ -1,0 +1,41 @@
+# ---- Personal runtime data (created locally by the app, never commit) ----
+settings.json
+user_baseline.json
+mood_log.csv
+notes.txt
+mood_classifier.pkl
+*.pkl
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ---- Virtual environments / secrets ----
+venv/
+.venv/
+env/
+.env
+.env.local
+*.env
+
+# ---- PyInstaller build artifacts ----
+build/
+dist/
+*.spec
+
+# ---- IDE / editor ----
+.idea/
+.vscode/
+*.iml
+*.swp
+*.swo
+
+# ---- OS files ----
+.DS_Store
+Thumbs.db
+desktop.ini
