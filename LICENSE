@@ -1,25 +1,31 @@
-Copyright (c) 2025 Hasan Özay Yilmaz. All rights reserved.
+EmotionMirror
+Copyright (c) 2025-2026 Hasan Özay Yılmaz (GitHub: @zxvozayy)
 
-TERMS AND CONDITIONS
+All rights reserved. Source available for portfolio review.
 
-1. PERMITTED USE
-   You are permitted to download and use this software for personal,
-   non-commercial purposes only.
+This repository is published so that recruiters, clients and fellow
+developers can read the code, evaluate the author's work, and run the
+application locally for personal evaluation.
 
-2. RESTRICTIONS
-   You may NOT, without prior explicit written permission from the author:
-   - Copy, reproduce, or duplicate any part of this software
-   - Modify, adapt, or create derivative works
-   - Merge this software with other projects
-   - Publish or redistribute this software in any form
-   - Sublicense or sell copies of this software
-   - Use this software or any part of it for commercial purposes
+You are welcome to:
+  - view and read the source code;
+  - clone or download it and run it on your own machine to evaluate it;
+  - reference or link to it when discussing the author's work.
 
-3. NO WARRANTY
-   This software is provided "as is", without warranty of any kind,
-   express or implied. The author is not liable for any damages arising
-   from the use of this software.
+Without prior written permission from the copyright holder, you may not:
+  - redistribute, republish or sell the code or any substantial part of it;
+  - use it, in whole or in part, in a commercial product or service;
+  - publish modified versions or derivative works.
 
-4. CONTACT
-   For permissions beyond the scope of this license, contact the author
-   directly via GitHub.
+Third-party libraries, services and assets referenced by this project remain
+subject to their own licenses and terms.
+
+If you would like to use this project beyond these terms (for example to
+build on it, license it, or collaborate), please get in touch via GitHub:
+https://github.com/zxvozayy
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHOR BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY ARISING FROM, OUT
+OF OR IN CONNECTION WITH THE SOFTWARE OR ITS USE.
