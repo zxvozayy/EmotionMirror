@@ -1,5 +1,6 @@
 import os
-os.environ["QT_MEDIA_BACKEND"] = "windows"  # must be set before importing PyQt6
+if os.name == "nt":
+    os.environ.setdefault("QT_MEDIA_BACKEND", "windows")  # must be set before importing PyQt6
 # Optional: still keep logging rules
 os.environ["QT_LOGGING_RULES"] = "qt.multimedia.ffmpeg.debug=false;qt.multimedia.ffmpeg.warning=false"
 
@@ -9,12 +10,25 @@ import time
 import threading
 import csv
 import pickle
-import random
 import json
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from pynput import keyboard, mouse
 from utils import resource_path
+from mood_engine import (
+    FEATURE_NAMES,
+    LOG_COLUMNS,
+    WINDOW_SECONDS,
+    BaselineTracker,
+    Features,
+    NonRepeatingPicker,
+    Settings,
+    compute_features,
+    prune_older_than,
+    rule_based_mood,
+    load_settings as _load_settings_file,
+    save_settings as _save_settings_file,
+)
 from character_selection import CharacterSelectionDialog
 from mood_popup import MoodPopup
 
@@ -494,20 +508,6 @@ else:
     print("⚠️ No trained model found, using rule-based fallback.")
 
 
-# Simple BaselineTracker replacement
-class BaselineTracker:
-    def __init__(self):
-        self.history = []
-
-    def update(self, features):
-        self.history.append(features)
-        if len(self.history) > 100:
-            self.history.pop(0)
-
-
-baseline = BaselineTracker()
-
-
 # --- Configuration & Settings Management ---
 class Config:
     MOOD_DATA = {
@@ -594,26 +594,14 @@ class Config:
     FEEDBACK_BATCH_SIZE = 5
 
 
-class Settings:
-    def __init__(self):
-        self.is_feedback_enabled = True  # Default state
-        self.is_first_run = True
-        self.user_name = "User"
-        self.is_sound_enabled = True
-
-
-def load_settings(settings):
+def load_settings(settings=None):
+    """Load settings.json; defaults are used (and later saved) when it is missing."""
+    loaded = _load_settings_file(Config.SETTINGS_FILE)
+    if settings is None:
+        return loaded
+    settings.__dict__.update(loaded.__dict__)
     if os.path.exists(Config.SETTINGS_FILE):
-        try:
-            with open(Config.SETTINGS_FILE, 'r') as f:
-                data = json.load(f)
-                settings.is_feedback_enabled = data.get('is_feedback_enabled', True)
-                settings.is_first_run = data.get('is_first_run', False)
-                settings.user_name = data.get('user_name', 'User')
-                settings.is_sound_enabled = data.get('is_sound_enabled', True)
-                print("✅ Settings loaded.")
-        except Exception as e:
-            print(f"⚠️ Error loading settings: {e}. Using default.")
+        print("✅ Settings loaded.")
     else:
         print("ℹ️ Settings file not found. Using default settings.")
     return settings
@@ -621,13 +609,15 @@ def load_settings(settings):
 
 def save_settings(settings):
     try:
-        with open(Config.SETTINGS_FILE, 'w') as f:
-            json.dump({
-                'is_feedback_enabled': settings.is_feedback_enabled,
-                'is_first_run': settings.is_first_run,
-                'user_name': settings.user_name,
-                'is_sound_enabled': settings.is_sound_enabled
-            }, f)
+        _save_settings_file(
+            Settings(
+                is_feedback_enabled=settings.is_feedback_enabled,
+                is_first_run=settings.is_first_run,
+                user_name=settings.user_name,
+                is_sound_enabled=settings.is_sound_enabled,
+            ),
+            Config.SETTINGS_FILE,
+        )
         print("✅ Settings saved.")
     except Exception as e:
         print(f"❌ Error saving settings: {e}")
@@ -651,18 +641,14 @@ def retrain_model(window_size: int = 800, min_labeled_total: int = 24, min_per_c
         df = pd.read_csv(csv_file, header=0)
 
         # Guard: required columns
-        required_cols = {
-            'mood', 'feedback',
-            'typing_speed', 'mouse_activity', 'backspace_activity',
-            'avg_keystroke_interval', 'typing_rhythm_variance'
-        }
+        required_cols = {'mood', 'feedback', *FEATURE_NAMES}
         missing = [c for c in required_cols if c not in df.columns]
         if missing:
             print(f"⚠️ Retrain aborted: missing columns in CSV: {missing}")
             return None
 
         # Keep only labeled rows (user feedback present & not empty)
-        df['feedback'] = df['feedback'].astype(str)
+        df['feedback'] = df['feedback'].fillna('').astype(str)
         df_labeled = df[df['feedback'].str.strip() != ''].copy()
 
         labeled_total = len(df_labeled)
@@ -674,13 +660,7 @@ def retrain_model(window_size: int = 800, min_labeled_total: int = 24, min_per_c
         df_labeled = df_labeled.tail(window_size)
 
         # Make sure feature columns are numeric & drop NaNs
-        feature_cols = [
-            'typing_speed',
-            'mouse_activity',
-            'backspace_activity',
-            'avg_keystroke_interval',
-            'typing_rhythm_variance'
-        ]
+        feature_cols = list(FEATURE_NAMES)
         df_labeled[feature_cols] = df_labeled[feature_cols].apply(pd.to_numeric, errors='coerce')
         before_drop = len(df_labeled)
         df_labeled.dropna(subset=feature_cols + ['mood'], inplace=True)
@@ -748,7 +728,8 @@ class InputTracker:
             else:
                 self.keystrokes.append(current_time)
             if self.last_keystroke_time is not None:
-                self.keystroke_timings.append(current_time - self.last_keystroke_time)
+                # (timestamp, gap) so rhythm stats use the same rolling window
+                self.keystroke_timings.append((current_time, current_time - self.last_keystroke_time))
             self.last_keystroke_time = current_time
 
     def on_click(self, x, y, button, pressed):
@@ -763,44 +744,26 @@ class InputTracker:
                 self.mouse_movements.append((current_time, x, y))
 
     def analyze_mood(self):
+        """Return (mood, Features) for the last WINDOW_SECONDS of activity."""
         now = time.time()
         with self.lock:
-            typing_last_5min = [t for t in self.keystrokes if now - t <= 300]
-            mouse_last_5min = [t for t in self.mouse_clicks if now - t <= 300]
-            backspace_last_5min = [t for t in self.backspace_presses if now - t <= 300]
-            recent_keystroke_timings = [t for t in self.keystroke_timings if t < 2.0]
-
-            typing_speed = len(typing_last_5min)
-            mouse_activity = len(mouse_last_5min)
-            backspace_activity = len(backspace_last_5min)
-            total_key_activity = typing_speed + backspace_activity
-
-        backspace_ratio = backspace_activity / total_key_activity if total_key_activity > 0 else 0
-        avg_keystroke_interval = (sum(recent_keystroke_timings) / len(recent_keystroke_timings) if recent_keystroke_timings else 0)
-        variance_keystroke = (sum((x - avg_keystroke_interval) ** 2 for x in recent_keystroke_timings) / len(recent_keystroke_timings) if recent_keystroke_timings else 0)
-
-        feature_names = ['typing_speed', 'mouse_activity', 'backspace_activity', 'avg_keystroke_interval', 'typing_rhythm_variance']
-        features_df = pd.DataFrame([[typing_speed, mouse_activity, backspace_activity, avg_keystroke_interval, variance_keystroke]], columns=feature_names)
+            # Keep memory bounded: only the current window is ever needed.
+            for items in (self.keystrokes, self.mouse_clicks, self.backspace_presses,
+                          self.keystroke_timings, self.mouse_movements):
+                prune_older_than(items, now, WINDOW_SECONDS)
+            features = compute_features(
+                self.keystrokes, self.mouse_clicks, self.backspace_presses,
+                self.keystroke_timings, now, WINDOW_SECONDS,
+            )
 
         global clf
         if clf is not None:
             try:
-                mood = clf.predict(features_df)[0]
+                features_df = pd.DataFrame([features.as_row()], columns=list(FEATURE_NAMES))
+                return clf.predict(features_df)[0], features
             except Exception as e:
                 print(f"Error with AI prediction: {e}. Falling back to rule-based.")
-                mood = self._rule_based_mood(typing_speed, mouse_activity, backspace_ratio, backspace_activity)
-        else:
-            mood = self._rule_based_mood(typing_speed, mouse_activity, backspace_ratio, backspace_activity)
-
-        return mood, typing_speed, mouse_activity, backspace_activity, recent_keystroke_timings
-
-    def _rule_based_mood(self, typing_speed, mouse_activity, backspace_ratio, backspace_activity):
-        if typing_speed <= 15 and mouse_activity <= 8: return "idle"
-        elif backspace_ratio >= 0.20 and typing_speed >= 170: return "struggling"
-        elif typing_speed >= 450 and mouse_activity <= 26 and backspace_ratio <= 0.15: return "deep_work"
-        elif typing_speed <= 120 and mouse_activity >= 50: return "browsing"
-        elif typing_speed <= 80 and mouse_activity <= 20 and backspace_activity <= 12: return "low_energy"
-        else: return "steady"
+        return rule_based_mood(features), features
 
 
 # --- GUI Components ---
@@ -843,72 +806,34 @@ class PersistentHead(QLabel):
                     print(f"Could not play sound: {e}")
             self.popup.show_menu()
 
-_LAST_SHOWN = {"comments": {}, "tips": {}}
+_PICKER = NonRepeatingPicker()
 
-def _pick_non_repeating(mood: str, kind: str, items: list[str]) -> str:
-    """
-    Return a random item from `items` for the given mood/kind that is NOT the
-    same as last time. Falls back to any if there's only one choice.
-    kind: "comments" | "tips"
-    """
-    import random
-    if not items:
-        return ""
 
-    last = _LAST_SHOWN.get(kind, {}).get(mood, None)
-    if len(items) == 1:
-        choice = items[0]
-    else:
-        candidates = [x for x in items if x != last]
-        if not candidates:
-            candidates = items
-        choice = random.choice(candidates)
-
-    _LAST_SHOWN[kind][mood] = choice
-    return choice
 # --- Helper Functions ---
-def get_comment_and_tip(mood, talking_mode="Best Friend"):
+def get_comment_and_tip(mood):
+    """Pick a curated comment + tip for the mood (tone is applied by MoodPopup)."""
     mood_info = Config.MOOD_DATA.get(mood, None)
     if mood_info:
-        base_comment = _pick_non_repeating(mood, "comments", mood_info["comments"])
-        base_tip     = _pick_non_repeating(mood, "tips",     mood_info["tips"])
+        comment = _PICKER.pick(mood, "comments", mood_info["comments"])
+        tip = _PICKER.pick(mood, "tips", mood_info["tips"])
         color = mood_info["color"]
     else:
-        base_comment = "Feeling... mysterious. 👀"
-        base_tip = "Just keep going."
+        comment = "Feeling... mysterious. 👀"
+        tip = "Just keep going."
         color = QColor(200, 200, 200, 230)
-
-    # (keep your tone adjustments the same)
-    if talking_mode.lower() == "teacher":
-        comment = f"{base_comment} Remember — steady focus builds consistency."
-        tip = f"{base_tip} Stay disciplined; growth is built one session at a time."
-    elif talking_mode.lower() == "best friend":
-        comment = f"{base_comment} Bro, you’re killing it today. 💪"
-        tip = f"{base_tip} Take a short breather, then crush the next task."
-    elif talking_mode.lower() in ["love", "girlfriend"]:
-        comment = f"{base_comment} I can see you are trying, darling. 💖"
-        tip = f"{base_tip} Promise me you’ll rest your eyes soon, okay?"
-    else:
-        comment, tip = base_comment, base_tip
-
     return comment, tip, color
 
 
-
-def log_mood(mood, typing_speed, mouse_activity, backspace_activity, keystroke_timings, feedback=None):
+def log_mood(mood, features: Features, feedback=None):
     file_exists = os.path.isfile(Config.LOG_FILE)
-    avg_keystroke_interval = sum(keystroke_timings) / len(keystroke_timings) if keystroke_timings else 0
-    typing_rhythm_variance = sum([(t - avg_keystroke_interval) ** 2 for t in keystroke_timings]) / len(keystroke_timings) if keystroke_timings else 0
-    features_row_for_log = [typing_speed, mouse_activity, backspace_activity, avg_keystroke_interval, typing_rhythm_variance]
-    with open(Config.LOG_FILE, 'a', newline='') as f:
+    with open(Config.LOG_FILE, 'a', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
         if not file_exists:
-            writer.writerow(['timestamp', 'mood', 'typing_speed', 'mouse_activity', 'backspace_activity', 'avg_keystroke_interval', 'typing_rhythm_variance', 'feedback'])
+            writer.writerow(LOG_COLUMNS)
         writer.writerow([
             time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()),
             mood,
-            round(features_row_for_log[0], 3), round(features_row_for_log[1], 3), round(features_row_for_log[2], 3),
-            round(features_row_for_log[3], 3), round(features_row_for_log[4], 3),
+            *[round(v, 3) for v in features.as_row()],
             feedback if feedback is not None else ""
         ])
 
@@ -918,17 +843,13 @@ def mood_check_and_show(popup, tracker, baseline, settings, forced_mood=None):
     print("🔍 Running mood check...")
     if forced_mood:
         mood = forced_mood
-        typing_speed, mouse_activity, backspace_activity, recent_keystroke_timings = 0, 0, 0, []
+        features = Features(0, 0, 0, 0.0, 0.0)
     else:
-        mood, typing_speed, mouse_activity, backspace_activity, recent_keystroke_timings = tracker.analyze_mood()
-        current_features = {"typing_speed": typing_speed, "backspaces": backspace_activity, "mouse_activity": mouse_activity, "tab_switches": 0}
-        baseline.update(current_features)
+        mood, features = tracker.analyze_mood()
+        baseline.update({name: getattr(features, name) for name in FEATURE_NAMES})
 
-    # Safe default for talking mode (after reset)
-    talking_mode = getattr(settings, "selected_mode", "Best Friend")
-
-    log_mood(mood, typing_speed, mouse_activity, backspace_activity, recent_keystroke_timings, feedback="")
-    comment, tip, color = get_comment_and_tip(mood, talking_mode)
+    log_mood(mood, features, feedback="")
+    comment, tip, color = get_comment_and_tip(mood)
 
     popup.show_mood(comment, tip, color)
 
@@ -962,7 +883,7 @@ def handle_reset_request(popup, tracker, baseline, settings):
 def handle_save_notes(note_text):
     print(f"💾 Saving note: {note_text[:50]}...")
     try:
-        with open(Config.NOTES_FILE, 'a') as f:
+        with open(Config.NOTES_FILE, 'a', encoding='utf-8') as f:
             timestamp = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
             f.write(f"--- {timestamp} ---\n{note_text}\n\n")
         print("✅ Note saved successfully")
@@ -985,7 +906,7 @@ def handle_feedback_submitted(new_mood, feedback_text):
         return
 
     # Read all rows
-    with open(Config.LOG_FILE, 'r', newline='') as f:
+    with open(Config.LOG_FILE, 'r', newline='', encoding='utf-8') as f:
         rows = list(csv.reader(f))
 
     # Need at least header + one data row
@@ -999,7 +920,7 @@ def handle_feedback_submitted(new_mood, feedback_text):
     rows[last_idx][-1] = feedback_text    # write feedback text
 
     # Write back
-    with open(Config.LOG_FILE, 'w', newline='') as f:
+    with open(Config.LOG_FILE, 'w', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
         writer.writerows(rows)
 
@@ -1189,7 +1110,7 @@ def main():
     app.setApplicationName("Mood Tracker")
     app.setApplicationDisplayName("Mood Tracker")
     app.setApplicationVersion("1.0")
-    app.setOrganizationName("Özay")
+    app.setOrganizationName("EmotionMirror")
     app.setOrganizationDomain("mood-tracker.local")
     # --- VIDEO SPLASH SCREEN RUNS HERE ---
     # after: app = QApplication(sys.argv)
@@ -1206,8 +1127,9 @@ def main():
 
 
     # Settings
-    settings = Settings()
-    load_settings(settings)
+    settings = load_settings()
+    if not os.path.exists(Config.SETTINGS_FILE):
+        save_settings(settings)  # create settings.json with defaults on first launch
 
     # Sounds (optional: only init if enabled)
     try:
