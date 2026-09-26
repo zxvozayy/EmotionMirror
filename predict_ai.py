@@ -1,43 +1,32 @@
-import pandas as pd
-import pickle
+"""Predict the mood for the most recent row of mood_log.csv with the trained model."""
+from __future__ import annotations
+
 import os
+import pickle
+import sys
 
-# --- Config ---
-csv_file = "mood_log.csv"
-model_file = "mood_classifier.pkl"
+from mood_engine import FEATURE_NAMES
+from train_ai import CSV_FILE, MODEL_FILE, load_mood_log
 
-# Check files
-if not os.path.isfile(csv_file):
-    raise FileNotFoundError(f"{csv_file} not found.")
-if not os.path.isfile(model_file):
-    raise FileNotFoundError(f"{model_file} not found.")
 
-# Load trained model
-with open(model_file, "rb") as f:
-    model = pickle.load(f)
+def main() -> int:
+    for path in (CSV_FILE, MODEL_FILE):
+        if not os.path.isfile(path):
+            print(f"{path} not found (run the app, then `python train_ai.py`).")
+            return 1
 
-# Load latest data
-column_names = [
-    "timestamp",
-    "mood",
-    "typing_speed",
-    "mouse_activity",
-    "backspace_activity",
-    "avg_keystroke_interval",
-    "typing_rhythm_variance"
-]
-df = pd.read_csv(csv_file, names=column_names, parse_dates=[0], dayfirst=True, header=0)
+    with open(MODEL_FILE, "rb") as fh:
+        model = pickle.load(fh)
 
-# Latest row
-latest_row = df.iloc[-1]
-features = latest_row[["typing_speed", "mouse_activity", "backspace_activity",
-                       "avg_keystroke_interval", "typing_rhythm_variance"]].values.reshape(1, -1)
+    df = load_mood_log(CSV_FILE)
+    if df.empty:
+        print("No usable rows in the log yet.")
+        return 1
 
-# Convert to DataFrame to avoid sklearn warnings
-feature_names = ["typing_speed", "mouse_activity", "backspace_activity",
-                 "avg_keystroke_interval", "typing_rhythm_variance"]
-features_df = pd.DataFrame(features, columns=feature_names)
+    latest = df.iloc[[-1]][list(FEATURE_NAMES)]
+    print(f"Latest mood prediction: {model.predict(latest)[0]}")
+    return 0
 
-# Predict
-predicted_mood = model.predict(features_df)[0]
-print(f"Latest mood prediction: {predicted_mood}")
+
+if __name__ == "__main__":
+    sys.exit(main())
